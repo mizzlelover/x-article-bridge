@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>X Article Bridge</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <main class="panel-shell">
+      <header class="panel-header">
+        <div>
+          <p class="eyebrow">X ARTICLE BRIDGE</p>
+          <h1>把文章送进草稿</h1>
+        </div>
+        <span class="version">0.1.12</span>
+      </header>
+      <section class="drop-hint" aria-labelledby="drop-title">
+        <h2 id="drop-title">直接拖入正文</h2>
+        <p>先打开或新建一篇 X Article，再把单个文件拖进正文编辑框。</p>
+        <code>.html · .htm · .md</code>
+        <label class="file-picker" for="article-file">选择文件导入</label>
+        <input id="article-file" type="file" accept=".html,.htm,.md,text/html,text/markdown">
+        <p id="file-status" class="file-status" role="status"></p>
+        <button id="configure-cover" class="file-picker" type="button">单独设置封面</button>
+      </section>
+      <section class="rules" aria-labelledby="rules-title">
+        <h2 id="rules-title">首版导入规则</h2>
+        <ul>
+          <li>HTML 图片请使用 data URL 内嵌，文件可以独立移动。</li>
+          <li>正文只保留 X 可识别的标题、段落、列表、引用、链接和强调。</li>
+          <li>图片会逐张交给 X 的媒体入口上传，失败会停在具体图片。</li>
+        </ul>
+      </section>
+      <footer class="panel-footer" role="note">
+        只负责写入草稿，不会替你点击发布。
+      </footer>
+    </main>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

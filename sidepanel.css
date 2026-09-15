@@ -1,0 +1,31 @@
+:root {
+  --surface-primary: #111318;
+  --surface-secondary: #1A1D24;
+  --surface-elevated: #232733;
+  --text-primary: #F5F7FA;
+  --text-secondary: #A7AFBE;
+  --text-tertiary: #737C8C;
+  --border-default: #343A48;
+  --border-subtle: #272C36;
+  --accent-primary: #F4B740;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-primary); color: var(--text-primary); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.panel-shell { display: grid; gap: 20px; min-height: 100vh; padding: 24px; align-content: start; }
+.panel-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.eyebrow { margin: 0 0 4px; color: var(--accent-primary); font: 500 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }
+h1, h2, p { margin: 0; }
+h1 { font-size: 20px; line-height: 1.25; }
+h2 { font-size: 14px; line-height: 1.4; }
+.version { color: var(--text-tertiary); font: 500 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.drop-hint, .rules { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--border-default); border-radius: 10px; background: var(--surface-secondary); }
+.drop-hint p, .rules li, .panel-footer { color: var(--text-secondary); }
+.drop-hint code { width: fit-content; padding: 4px 8px; border-radius: 6px; background: var(--surface-elevated); color: var(--text-primary); font: 500 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.file-picker { width: fit-content; padding: 8px 10px; border: 1px solid var(--accent-primary); border-radius: 7px; color: var(--accent-primary); cursor: pointer; font-weight: 600; }
+.file-picker:hover { background: rgba(244, 183, 64, .12); }
+#article-file { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.file-status { min-height: 1.5em; color: var(--text-tertiary); font-size: 12px; }
+.rules ul { display: grid; gap: 8px; margin: 0; padding-left: 18px; }
+.panel-footer { padding-top: 12px; border-top: 1px solid var(--border-subtle); font-size: 12px; }
+:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 3px; }

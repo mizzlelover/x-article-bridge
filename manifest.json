@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "X Article Bridge",
+  "version": "0.1.12",
+  "description": "Import a constrained HTML or Markdown article into the open X Article editor.",
+  "permissions": ["storage", "scripting", "activeTab", "sidePanel"],
+  "host_permissions": ["https://x.com/*", "https://twitter.com/*"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "X Article Bridge"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/compose/articles*", "https://twitter.com/compose/articles*"],
+      "js": ["src/format.js", "src/import-state.js", "src/editor.js", "src/media.js", "src/cover.js", "src/content.js"],
+      "css": ["src/content.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["src/placement.js", "src/main-world.js"],
+      "run_at": "document_idle",
+      "world": "MAIN",
+      "all_frames": false
+    }
+  ]
+}
