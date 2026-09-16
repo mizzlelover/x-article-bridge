@@ -2,6 +2,7 @@ const STATUS_ID = "xab-status-rail";
 const importGate = createImportGate();
 let coverImages = [];
 let coverArticleUrl = '';
+let retrySession = null;
 
 function editorRoot() {
   return [...document.querySelectorAll('[contenteditable="true"]')].find((element) => {
@@ -33,6 +34,43 @@ function createStatusRail() {
   close.addEventListener('click', () => { rail.hidden = true; });
   rail.prepend(close);
   document.body.append(rail);
+}
+
+function clearRetryAction() {
+  document.getElementById('xab-retry-import')?.remove();
+}
+
+function showRetryAction(session) {
+  const rail = document.getElementById(STATUS_ID);
+  if (!rail || !session) return;
+  clearRetryAction();
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.id = 'xab-retry-import';
+  retry.textContent = `重试失败图片（${session.remainingIndexes.length} 张）`;
+  retry.addEventListener('click', async () => {
+    retry.disabled = true;
+    try {
+      await retryPendingImages();
+    } catch {
+      retry.disabled = false;
+    }
+  });
+  rail.append(retry);
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : '未知错误';
+}
+
+function reportImportError(error) {
+  if (retrySession) {
+    const failed = retrySession.parsed.assets[retrySession.failedIndex ?? retrySession.nextIndex];
+    setStatus('error', '导入未完成', `已完成 ${retrySession.completedCount}/${retrySession.parsed.assets.length} 张；${failed?.name || '图片'}失败：${errorMessage(error)}`);
+    showRetryAction(retrySession);
+    return;
+  }
+  setStatus('error', '导入失败', errorMessage(error));
 }
 
 function setTitle(title) {
@@ -154,12 +192,67 @@ async function assetFile(asset, localFiles = []) {
   return new File([blob], asset.name, { type: blob.type });
 }
 
+async function uploadRemainingImages(session, token) {
+  for (let index = session.nextIndex; index < session.parsed.assets.length; index += 1) {
+    importGate.assert(token);
+    const asset = session.parsed.assets[index];
+    session.failedIndex = index;
+    setStatus('working', `正在上传图片 ${index + 1}/${session.parsed.assets.length}`, asset.name);
+    if (location.href !== session.articleUrl || !session.root.isConnected) {
+      throw new Error('文章已切换，已停止导入');
+    }
+    try {
+      const image = session.images[index];
+      if (!selectMarker(session.root, asset.marker)) throw new Error(`找不到图片位置：${asset.name}`);
+      await uploadFile(image, session.root, asset.marker);
+      if (findMarker(session.root, asset.marker)) throw new Error(`图片定位尚未完成：${asset.name}`);
+      markImportAssetComplete(session, index);
+    } catch (error) {
+      markImportAssetFailure(session, index, error);
+      throw error;
+    }
+  }
+}
+
+function finishImportedSession(session) {
+  retrySession = null;
+  clearRetryAction();
+  setStatus('done', '已导入 X 草稿', `${session.fileName} · ${session.parsed.assets.length} 张图片`);
+  offerCover(session.images);
+  coverImages = session.images;
+  coverArticleUrl = location.href;
+}
+
+async function retryPendingImages() {
+  const session = retrySession;
+  if (!session) throw new Error('当前没有可重试的图片');
+  document.getElementById(STATUS_ID).hidden = false;
+  let token = null;
+  try {
+    token = importGate.begin();
+    if (location.href !== session.articleUrl || !session.root.isConnected) {
+      throw new Error('文章已切换，请重新导入');
+    }
+    await uploadRemainingImages(session, token);
+    finishImportedSession(session);
+  } catch (error) {
+    retrySession = session;
+    reportImportError(error);
+    throw error;
+  } finally {
+    if (token) importGate.end(token);
+  }
+}
+
 async function importArticle(file) {
   const root = editorRoot();
   if (!root) throw new Error("没有找到 X Article 正文编辑器");
   let token = null;
+  let session = null;
   try {
     token = importGate.begin();
+    retrySession = null;
+    clearRetryAction();
     document.getElementById(STATUS_ID).hidden = false;
     coverImages = [];
     document.getElementById('xab-cover-options')?.remove();
@@ -186,22 +279,14 @@ async function importArticle(file) {
     setTitle(parsed.title);
     const bodyResult = await bridgeRequest("replace-body", { html: parsed.html }, 10000);
     if (!bodyResult?.ok) throw new Error(bodyResult?.error || "正文写入失败");
-    for (let index = 0; index < parsed.assets.length; index += 1) {
-      importGate.assert(token);
-      const asset = parsed.assets[index];
-      setStatus("working", `正在上传图片 ${index + 1}/${parsed.assets.length}`, asset.name);
-      if (location.href !== articleUrl || !root.isConnected) throw new Error("文章已切换，已停止导入");
-      const image = images[index];
-      importGate.assert(token);
-      if (!selectMarker(root, asset.marker)) throw new Error(`找不到图片位置：${asset.name}`);
-      await uploadFile(image, root, asset.marker);
-      if (findMarker(root, asset.marker)) throw new Error(`图片定位尚未完成：${asset.name}`);
+    session = createImportRetryState({ articleUrl, root, fileName: file.name, parsed, images });
+    await uploadRemainingImages(session, token);
+    finishImportedSession(session);
+  } catch (error) {
+    if (session) {
+      retrySession = session;
     }
-    importGate.assert(token);
-    setStatus("done", "已导入 X 草稿", `${file.name} · ${parsed.assets.length} 张图片`);
-    offerCover(images);
-    coverImages = images;
-    coverArticleUrl = location.href;
+    throw error;
   } finally {
     if (token) importGate.end(token);
   }
@@ -216,7 +301,7 @@ function acceptDrop(event) {
   }
   event.preventDefault();
   event.stopImmediatePropagation();
-  importArticle(file).catch((error) => setStatus("error", "导入失败", error instanceof Error ? error.message : "未知错误"));
+  importArticle(file).catch(reportImportError);
 }
 
 function boot() {
@@ -232,8 +317,14 @@ function boot() {
       sendResponse({ok:true});
       return;
     }
+    if (message.type === 'retryFailed') {
+      retryPendingImages()
+        .then(() => sendResponse({ ok: true }))
+        .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      return true;
+    }
     if (message.type === "ping") {
-      sendResponse({ ready: Boolean(editorRoot()) });
+      sendResponse({ ready: Boolean(editorRoot()), retryAvailable: Boolean(retrySession) });
       return;
     }
     if (message.type === "importArticle") {
@@ -241,8 +332,8 @@ function boot() {
         .then(() => ({ ok: true }))
         .then(sendResponse)
         .catch((error) => {
-          const detail = error instanceof Error ? error.message : "未知错误";
-          setStatus("error", "导入失败", detail);
+          const detail = errorMessage(error);
+          reportImportError(error);
           sendResponse({ ok: false, error: detail });
         });
       return true;

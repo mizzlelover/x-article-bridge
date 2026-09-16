@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "X Article Bridge",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Import a constrained HTML or Markdown article into the open X Article editor.",
   "permissions": ["storage", "scripting", "activeTab", "sidePanel"],
   "host_permissions": ["https://x.com/*", "https://twitter.com/*"],

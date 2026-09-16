@@ -1,5 +1,6 @@
 const input = document.getElementById("article-file");
 const status = document.getElementById("file-status");
+const retryButton = document.getElementById("retry-failed");
 
 function setStatus(text) {
   status.textContent = text;
@@ -23,6 +24,19 @@ document.getElementById('configure-cover').addEventListener('click', async () =>
     await chrome.tabs.sendMessage(tab.id, {type:'configureCover'});
     setStatus('请在 X 页面右上角选择封面图片。无需重新导入正文。');
   } catch (error) { setStatus(error.message); }
+});
+
+retryButton.addEventListener('click', async () => {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.id) throw new Error('请先打开 X Article');
+    await ensureContentScript(tab.id);
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'retryFailed' });
+    if (!response?.ok) throw new Error(response?.error || '当前没有可重试的图片');
+    setStatus('已开始重试失败图片，详情看正文右上角状态');
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : '重试失败');
+  }
 });
 
 async function ensureContentScript(tabId) {
