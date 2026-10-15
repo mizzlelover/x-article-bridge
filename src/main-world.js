@@ -9,6 +9,7 @@
   let activeOperation = false;
 
   async function replaceBody(html) {
+    editorElement()?.focus();
     const node = draftStateNode();
     if (!node) throw new Error("找不到 X 正文编辑状态");
     const state = node.props.editorState;
@@ -20,16 +21,22 @@
       focusKey: last.getKey(), focusOffset: last.getLength(),
       isBackward: false, hasFocus: true
     });
-    node.props.onChange(state.constructor.forceSelection(state, selection));
-    await sleep(100);
+    const selectedState = state.constructor.forceSelection(state, selection);
     const parsed = new DOMParser().parseFromString(html, "text/html");
     const plain = parsed.body.textContent || "";
-    const transfer = new DataTransfer();
-    transfer.setData("text/html", html);
-    transfer.setData("text/plain", plain);
-    editorElement().dispatchEvent(new ClipboardEvent("paste", {
-      bubbles: true, cancelable: true, clipboardData: transfer
-    }));
+    const pasteNode = node.draftEditor || node;
+    const handled = typeof pasteNode.props.handlePastedText === "function"
+      && pasteNode.props.handlePastedText(plain, html, selectedState) === "handled";
+    if (!handled) {
+      node.props.onChange(selectedState);
+      await sleep(100);
+      const transfer = new DataTransfer();
+      transfer.setData("text/html", html);
+      transfer.setData("text/plain", plain);
+      editorElement().dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true, cancelable: true, clipboardData: transfer
+      }));
+    }
     const normalized = (text) => text.replace(/\s/g, "");
     for (let attempt = 0; attempt < 50; attempt += 1) {
       await sleep(100);
@@ -50,48 +57,55 @@
     }) || null;
   }
 
-  function fiberForEditor() {
+  function fiberForEditor(withAncestors = false) {
     const editor = editorElement();
     if (!editor) return null;
     const fiberKey = Object.keys(editor).find((key) => key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$"));
-    return fiberKey ? editor[fiberKey] : null;
+    const mounted = fiberKey ? editor[fiberKey] : null;
+    let root = mounted;
+    while (root?.return) root = root.return;
+    const current = root?.stateNode?.current;
+    if (!current) {
+      const path = [];
+      for (let fiber = mounted; fiber; fiber = fiber.return) path.push(fiber);
+      return withAncestors ? path : mounted;
+    }
+    const stack = [{ fiber: current, parents: [] }];
+    while (stack.length) {
+      const { fiber, parents } = stack.pop();
+      if (fiber.stateNode === editor) return withAncestors ? [fiber, ...parents] : fiber;
+      if (fiber.sibling) stack.push({ fiber: fiber.sibling, parents });
+      if (fiber.child) stack.push({ fiber: fiber.child, parents: [fiber, ...parents] });
+    }
+    return withAncestors ? [] : null;
   }
 
   function draftStateNode() {
-    let fiber = fiberForEditor();
-    for (let depth = 0; depth < 80 && fiber; depth += 1) {
+    let draftEditor = null;
+    for (const fiber of fiberForEditor(true) || []) {
       const stateNode = fiber.stateNode;
-      if (stateNode?.props?.editorState && typeof stateNode.props.onChange === "function") return stateNode;
-      fiber = fiber.return;
+      if (!draftEditor && stateNode?.props?.editorState && typeof stateNode.props.onChange === "function") {
+        draftEditor = stateNode;
+      }
+      const props = stateNode?.props || fiber.memoizedProps;
+      if (props?.editorState && typeof props.onChange === "function" && typeof props.onAddMediaFiles === "function") {
+        return { props, draftEditor };
+      }
     }
-    return null;
+    return draftEditor;
   }
 
-  function findOnFilesAddedInChildren(fiber, depth = 0) {
-    if (!fiber || depth > 8) return null;
-    const props = fiber.memoizedProps || fiber.stateNode?.props;
-    if (typeof props?.onFilesAdded === "function") return props.onFilesAdded;
-    return findOnFilesAddedInChildren(fiber.child, depth + 1)
-      || findOnFilesAddedInChildren(fiber.sibling, depth);
-  }
-
-  function onFilesAdded() {
-    let fiber = fiberForEditor();
-    for (let depth = 0; depth < 160 && fiber; depth += 1) {
-      const props = fiber.memoizedProps || fiber.stateNode?.props;
-      if (typeof props?.onFilesAdded === "function") return props.onFilesAdded;
-      const nested = findOnFilesAddedInChildren(fiber.child);
-      if (nested) return nested;
-      fiber = fiber.return;
+  function articleMediaLimit() {
+    for (const fiber of fiberForEditor(true) || []) {
+      for (const props of [fiber.stateNode?.props, fiber.memoizedProps]) {
+        const switches = props?.value?.featureSwitches || props?.featureSwitches;
+        if (typeof switches?.getNumberValue === "function") {
+          const limit = switches.getNumberValue("responsive_web_twitter_article_media_limit", 25);
+          if (Number.isInteger(limit) && limit > 0) return limit;
+        }
+      }
     }
-    return null;
-  }
-
-  function base64ToFile(base64, name, type) {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    return new File([bytes], name || "article-image.png", { type: type || "image/png" });
+    return 25;
   }
 
   function markerLocation(contentState, marker) {
@@ -101,26 +115,16 @@
     contentState.getBlockMap().forEach((block, key) => {
       if (block.getType() === "atomic") return;
       const text = block.getText() || "";
-      const offset = text.indexOf(marker);
+      let offset = text.indexOf(marker);
+      while (offset >= 0 && /\d/.test(text[offset + marker.length] || "")) {
+        offset = text.indexOf(marker, offset + marker.length);
+      }
       if (offset < 0) return;
       const candidate = { blockKey: key, offset, length: marker.length, exact: text.trim() === marker };
       if (candidate.exact && !exact) exact = candidate;
       else if (!partial) partial = candidate;
     });
     return exact || partial;
-  }
-
-  function placeSelectionAtMarker(draftNode, marker) {
-    const editorState = draftNode.props.editorState;
-    const location = markerLocation(editorState.getCurrentContent(), marker);
-    if (!location) return null;
-    const selection = editorState.getSelection().constructor.createEmpty(location.blockKey).merge({
-      anchorOffset: location.offset,
-      focusOffset: location.offset
-    });
-    const EditorState = editorState.constructor;
-    draftNode.props.onChange(EditorState.forceSelection(editorState, selection));
-    return location;
   }
 
   function atomicBlockKeys(contentState) {
@@ -213,42 +217,148 @@
     return true;
   }
 
-  function uploadedMedia(content, block) {
-    if (block.getType() !== "atomic") return false;
+  function serverMediaIds(content, block) {
+    if (block.getType() !== "atomic") return [];
     const chars = block.getCharacterList();
-    let complete = false;
+    const ids = new Set();
     chars.forEach((character) => {
       const key = character.getEntity();
       if (key == null) return;
       const entity = content.getEntity(key);
       if (entity.getType() !== "MEDIA") return;
       const visit = (data, depth = 0) => {
-        if (!data || typeof data !== "object" || depth > 5) return false;
-        return Object.entries(data).some(([name, value]) => {
+        if (!data || typeof data !== "object" || depth > 5) return;
+        for (const [name, value] of Object.entries(data)) {
           if (/^(media_?id(_string)?|mediaIdString|media_?key|id_str|rest_id)$/i.test(name)
-            && /^(?:\d+_)?\d{8,}$/.test(String(value))) return true;
-          return typeof value === "object" && visit(value, depth + 1);
-        });
+            && /^(?:\d+_)?\d{8,}$/.test(String(value))) ids.add(String(value));
+          if (typeof value === "object") visit(value, depth + 1);
+        }
       };
-      if (visit(entity.getData())) complete = true;
+      visit(entity.getData());
     });
-    return complete;
+    return [...ids];
   }
 
-  async function waitForNewAtomic(beforeKeys, timeout = 45000, articleUrl = location.href) {
+  function uploadedMedia(content, block) {
+    return serverMediaIds(content, block).length > 0;
+  }
+
+  function allServerMediaIds(content) {
+    const ids = new Set();
+    content.getBlockMap().forEach((block) => {
+      for (const id of serverMediaIds(content, block)) ids.add(id);
+    });
+    return ids;
+  }
+
+  function mediaBlockForId(content, mediaId) {
+    if (!mediaId) return null;
+    return atomicBlockKeys(content).find((key) => serverMediaIds(content, content.getBlockMap().get(key))
+      .includes(String(mediaId))) || null;
+  }
+
+  function findUploadedMedia(content, beforeIds, expectedMediaId = null) {
+    if (expectedMediaId) return mediaBlockForId(content, expectedMediaId);
+    return atomicBlockKeys(content).find((key) => serverMediaIds(content, content.getBlockMap().get(key))
+      .some((id) => !beforeIds.has(id))) || null;
+  }
+
+  function uploadFailureAlerts() {
+    return [...document.querySelectorAll('[role="alert"]')].filter((element) =>
+      /(?:Some (?:of your )?media failed to upload|Media failed to upload)/i.test(element.textContent || ""));
+  }
+
+  async function waitForNewAtomic(beforeIds, timeout = 120000, articleUrl = location.href, previousAlerts = new Set(), expectedMediaId = null) {
     const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
+    while (true) {
       if (location.href !== articleUrl) throw new Error("文章已切换，已停止图片定位");
       const latest = draftStateNode();
       const contentState = latest?.props?.editorState?.getCurrentContent?.();
       if (contentState) {
-        const key = atomicBlockKeys(contentState).find((candidate) => !beforeKeys.has(candidate)
-          && uploadedMedia(contentState, contentState.getBlockMap().get(candidate)));
-        if (key) return { draftNode: latest, blockKey: key };
+        const key = findUploadedMedia(contentState, beforeIds, expectedMediaId);
+        if (key) return { draftNode: latest, blockKey: key, mediaId: expectedMediaId || serverMediaIds(contentState, contentState.getBlockMap().get(key)).find((id) => !beforeIds.has(id)) };
+      }
+      if (uploadFailureAlerts().some((alert) => !previousAlerts.has(alert))) {
+        const error = new Error("X 图片上传失败，请稍后重试或检查该图片格式和大小");
+        error.uploadFailed = true;
+        throw error;
+      }
+      if (Date.now() >= deadline) return null;
+      await sleep(Math.min(100, deadline - Date.now()));
+    }
+  }
+
+  function contentSignature(content) {
+    const parts = [];
+    content.getBlockMap().forEach((block) => {
+      if (block.getType() === "atomic") {
+        parts.push(`media:${serverMediaIds(content, block).sort().join(",")}`);
+      } else {
+        parts.push(`text:${block.getText()}`);
+      }
+    });
+    return parts.join("\u001f");
+  }
+
+  async function settleImportedMedia(placements, timeout = 30000, articleUrl = location.href) {
+    if (!Array.isArray(placements) || placements.some((placement) => !placement?.marker || !placement?.mediaId)) {
+      return {ok: false, error: "X 尚未确认所有正文图片的媒体编号，请点击重试确认"};
+    }
+    if (!placements.length) return {ok: true, mediaCount: 0};
+    const deadline = Date.now() + timeout;
+    const stableFor = 6000;
+    let lastSignature = "";
+    let stableSince = 0;
+    while (true) {
+      if (location.href !== articleUrl) {
+        return {ok: false, error: "文章已切换，请在当前文章重试确认图片位置"};
+      }
+      const latest = draftStateNode();
+      const content = latest?.props?.editorState?.getCurrentContent?.();
+      if (content) {
+        const mediaKeys = atomicBlockKeys(content).filter((key) => uploadedMedia(content, content.getBlockMap().get(key)));
+        const presentIds = new Set(mediaKeys.flatMap((key) => serverMediaIds(content, content.getBlockMap().get(key))));
+        const allImagesPresent = mediaKeys.length === placements.length
+          && placements.every(({mediaId}) => presentIds.has(String(mediaId)));
+        if (allImagesPresent) {
+          let repaired = false;
+          for (const {marker, mediaId} of placements) {
+            if (!markerLocation(content, marker)) continue;
+            const mediaKey = mediaBlockForId(content, mediaId);
+            if (mediaKey && relocateMediaBlock(latest, marker, mediaKey)) {
+              repaired = true;
+              break;
+            }
+          }
+          if (repaired) {
+            lastSignature = "";
+            stableSince = 0;
+          } else {
+            const editorText = editorElement()?.textContent || "";
+            const noDomMarkers = placements.every(({marker}) => !new RegExp(`${marker}(?!\\d)`).test(editorText));
+            if (noDomMarkers) {
+              const signature = contentSignature(content);
+              if (signature === lastSignature) {
+                if (Date.now() - stableSince >= stableFor) return {ok: true, mediaCount: mediaKeys.length};
+              } else {
+                lastSignature = signature;
+                stableSince = Date.now();
+              }
+            } else {
+              lastSignature = "";
+              stableSince = 0;
+            }
+          }
+        } else {
+          lastSignature = "";
+          stableSince = 0;
+        }
+      }
+      if (Date.now() >= deadline) {
+        return {ok: false, error: "X 尚未确认全部图片和正文位置稳定，请点击重试确认；不会重复上传图片"};
       }
       await sleep(100);
     }
-    return null;
   }
 
   window.addEventListener("message", (event) => {
@@ -269,6 +379,10 @@
       post("ready", { requestId: message.requestId, ready: Boolean(draftStateNode()) });
       return;
     }
+    if (message.kind === "article-media-limit") {
+      post("article-media-limit-result", { requestId: message.requestId, mediaLimit: articleMediaLimit() });
+      return;
+    }
     if (message.kind === "capture-media-baseline") {
       const draftNode = draftStateNode();
       if (!draftNode) {
@@ -278,53 +392,25 @@
       post("media-baseline", {
         requestId: message.requestId,
         ok: true,
-        beforeKeys: atomicBlockKeys(draftNode.props.editorState.getCurrentContent())
+        beforeIds: [...allServerMediaIds(draftNode.props.editorState.getCurrentContent())]
       });
       return;
     }
-    if (message.kind === "upload-direct-media") {
-      const draftNode = draftStateNode();
-      const handler = onFilesAdded();
-      if (!draftNode || !handler) {
-        post("direct-media-result", { requestId: message.requestId, ok: false, error: "X 正文媒体上传接口不可用" });
-        return;
-      }
-      const location = placeSelectionAtMarker(draftNode, message.marker);
-      if (!location) {
-        post("direct-media-result", { requestId: message.requestId, ok: false, error: "找不到图片对应的正文位置" });
-        return;
-      }
-      const beforeKeys = new Set(atomicBlockKeys(draftNode.props.editorState.getCurrentContent()));
-      let file;
-      try {
-        file = base64ToFile(message.base64, message.name, message.type);
-        handler([file]);
-      } catch (error) {
-        post("direct-media-result", { requestId: message.requestId, ok: false, error: error instanceof Error ? error.message : "X 图片上传未能启动" });
-        return;
-      }
-      waitForNewAtomic(beforeKeys, 45000)
-        .then((uploaded) => {
-          if (!uploaded) return { ok: false, error: "X 图片上传没有生成正文媒体块" };
-          const latest = draftStateNode() || uploaded.draftNode;
-          if (!relocateMediaBlock(latest, message.marker, uploaded.blockKey)) {
-            return { ok: false, error: "找不到图片对应的正文位置" };
-          }
-          return { ok: true, blockKey: uploaded.blockKey };
-        })
-        .then((result) => post("direct-media-result", { requestId: message.requestId, ...result }))
-        .catch((error) => post("direct-media-result", { requestId: message.requestId, ok: false, error: error instanceof Error ? error.message : "X 图片上传失败" }));
+    if (message.kind === "settle-imported-media") {
+      settleImportedMedia(message.placements, 30000, message.articleUrl || location.href)
+        .then((result) => post("settled-media-result", {requestId: message.requestId, ...result}))
+        .catch((error) => post("settled-media-result", {requestId: message.requestId, ok: false, error: error instanceof Error ? error.message : "X 图片位置尚未稳定"}));
       return;
     }
     if (message.kind !== "relocate-native-media") return;
-    waitForNewAtomic(new Set(message.beforeKeys || []), 12000)
+    waitForNewAtomic(new Set(message.beforeIds || []), 120000)
       .then((uploaded) => {
         if (!uploaded) return { ok: false, error: "X 图片上传成功后没有生成正文媒体块" };
         const latest = draftStateNode() || uploaded.draftNode;
         if (!relocateMediaBlock(latest, message.marker, uploaded.blockKey)) {
           return { ok: false, error: "找不到图片对应的正文位置" };
         }
-        return { ok: true, blockKey: uploaded.blockKey };
+        return { ok: true, blockKey: uploaded.blockKey, mediaId: uploaded.mediaId };
       })
       .then((result) => post("native-media-result", { requestId: message.requestId, ...result }))
       .catch((error) => post("native-media-result", { requestId: message.requestId, ok: false, error: error instanceof Error ? error.message : "X 图片定位失败" }));

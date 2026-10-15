@@ -94,7 +94,11 @@ function findMarker(root, marker) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     const node = walker.currentNode;
-    const index = node.textContent?.indexOf(marker) ?? -1;
+    const text = node.textContent || "";
+    let index = text.indexOf(marker);
+    while (index >= 0 && /\d/.test(text[index + marker.length] || "")) {
+      index = text.indexOf(marker, index + marker.length);
+    }
     if (index >= 0) return { node, index };
   }
   return null;
@@ -204,7 +208,8 @@ async function uploadRemainingImages(session, token) {
     try {
       const image = session.images[index];
       if (!selectMarker(session.root, asset.marker)) throw new Error(`找不到图片位置：${asset.name}`);
-      await uploadFile(image, session.root, asset.marker);
+      const placement = await uploadFile(image, session.root, asset.marker);
+      if (placement?.mediaId) session.mediaIds[index] = String(placement.mediaId);
       if (findMarker(session.root, asset.marker)) throw new Error(`图片定位尚未完成：${asset.name}`);
       markImportAssetComplete(session, index);
     } catch (error) {
@@ -214,7 +219,24 @@ async function uploadRemainingImages(session, token) {
   }
 }
 
-function finishImportedSession(session) {
+async function finishImportedSession(session) {
+  if (session.parsed.assets.length) {
+    setStatus('working', '正在确认图片位置', '等待 X 完成最后一次正文更新');
+    const placements = session.parsed.assets.map((asset, index) => ({
+      marker: asset.marker,
+      mediaId: session.mediaIds[index]
+    }));
+    const result = await bridgeRequest('settle-imported-media', {
+      articleUrl: session.articleUrl,
+      placements
+    }, 35000);
+    if (!result?.ok) {
+      const failedIndex = Math.max(0, session.parsed.assets.length - 1);
+      session.failedIndex = failedIndex;
+      session.remainingIndexes = [failedIndex];
+      throw new Error(result?.error || 'X 尚未确认全部图片和正文位置稳定，请点击重试确认');
+    }
+  }
   retrySession = null;
   clearRetryAction();
   setStatus('done', '已导入 X 草稿', `${session.fileName} · ${session.parsed.assets.length} 张图片`);
@@ -234,7 +256,7 @@ async function retryPendingImages() {
       throw new Error('文章已切换，请重新导入');
     }
     await uploadRemainingImages(session, token);
-    finishImportedSession(session);
+    await finishImportedSession(session);
   } catch (error) {
     retrySession = session;
     reportImportError(error);
@@ -262,6 +284,11 @@ async function importArticle(file) {
     if (typeof source !== "string") throw new Error("无法读取文章内容");
     const parsed = file.name.toLowerCase().endsWith(".md") ? markdownToHtml(source) : normalizeHtml(source);
     if (!parsed.html) throw new Error("文件没有可导入的正文");
+    const limits = await bridgeRequest("article-media-limit");
+    const mediaLimit = limits?.mediaLimit || 25;
+    if (parsed.assets.length > mediaLimit) {
+      throw new Error(`正文包含 ${parsed.assets.length} 张图片，超过 X Article 当前 ${mediaLimit} 个正文媒体项的上限（封面另计）。请先减少图片，当前草稿尚未修改。`);
+    }
     const articleUrl = location.href;
     const localAssets = parsed.assets.filter((asset) => isLocalAsset(asset.source));
     const localFiles = localAssets.length ? await chooseLocalAssets(localAssets) : [];
@@ -281,7 +308,7 @@ async function importArticle(file) {
     if (!bodyResult?.ok) throw new Error(bodyResult?.error || "正文写入失败");
     session = createImportRetryState({ articleUrl, root, fileName: file.name, parsed, images });
     await uploadRemainingImages(session, token);
-    finishImportedSession(session);
+    await finishImportedSession(session);
   } catch (error) {
     if (session) {
       retrySession = session;

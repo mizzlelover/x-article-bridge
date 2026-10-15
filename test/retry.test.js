@@ -15,6 +15,7 @@ test("a failed asset can resume without replacing the already imported body", ()
     images: ["one", "two", "three"]
   });
 
+  assert.deepEqual(Array.from(state.mediaIds), [null, null, null]);
   context.api.markImportAssetComplete(state, 0);
   context.api.markImportAssetFailure(state, 1, new Error("X 图片上传失败"));
 

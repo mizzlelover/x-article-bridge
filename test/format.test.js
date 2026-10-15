@@ -385,41 +385,45 @@ test("uploadFile rejects X's failed-media state", async () => {
   );
 });
 
-test("uploadFile keeps marked images on X's native body-media picker", async () => {
-  let directCalls = 0;
+test("uploadFile returns the media identity from X's native placement", async () => {
   let inserted = false;
+  const waitTimeouts = [];
+  const placement = {ok: true, blockKey: "uploaded", mediaId: "2110601778198945792"};
   const input = {
     files: null,
     dispatchEvent: () => { inserted = true; }
   };
-  const root = {
-    querySelectorAll: () => inserted ? [{}] : []
-  };
-  const context = {
-    document: { querySelectorAll: () => [] },
-    directCalls: 0,
-    input,
-    DataTransfer: class {
-      constructor() { this.items = { add: () => {} }; this.files = []; }
-    },
-    Event: class {}
-  };
+  const root = {querySelectorAll: () => inserted ? [{}] : []};
+  const context = {document: {querySelectorAll: () => []}, input, waitTimeouts};
   runInNewContext(`${mediaSource}
-    uploadAtMarker = async () => { globalThis.directCalls += 1; return null; };
+    bridgeRequest = async () => null;
+    captureNativeUpload = async () => ({beforeIds: []});
+    relocateNativeUpload = async () => globalThis.placement;
+    placement = globalThis.placement;
     visibleButtons = () => [];
     mediaEditorTitle = () => null;
-    mediaInsertButton = () => ({ click: () => {} });
+    mediaInsertButton = () => ({click: () => {}});
     fileInputs = () => [];
-    visibleExactText = () => ({ click: () => {} });
+    visibleExactText = () => ({click: () => {}});
     mediaUploadFailure = () => false;
+    mediaUploadStatus = () => false;
     addPhotosButton = () => ({});
     inputForMediaControl = () => globalThis.input;
-    waitForUi = async (predicate) => predicate();
-    this.api = { uploadFile };
+    selectMarker = () => true;
+    waitForUi = async (predicate, _message, timeout) => {
+      globalThis.waitTimeouts.push(timeout);
+      return predicate();
+    };
+    DataTransfer = class { constructor() { this.files = []; this.items = {add: file => this.files.push(file)}; } };
+    Event = class {};
+    this.api = {uploadFile};
   `, context);
-  await context.api.uploadFile({ name: "article-image.png" }, root, "XABIMG0");
-  assert.equal(context.directCalls, 0);
-  assert.equal(input.files.length, 0);
+  context.placement = placement;
+  const result = await context.api.uploadFile({name: "article-image.png"}, root, "XABIMG0");
+  assert.equal(result.mediaId, placement.mediaId);
+  assert.equal(result.blockKey, "uploaded");
+  assert.ok(context.waitTimeouts.includes(120000));
+  assert.equal(input.files[0].name, "article-image.png");
 });
 
 test("uploadFile accepts X's direct body file input when no Add photos button appears", async () => {

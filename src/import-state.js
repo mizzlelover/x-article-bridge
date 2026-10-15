@@ -23,6 +23,7 @@ function createImportRetryState({articleUrl, root, fileName, parsed, images}) {
     fileName,
     parsed,
     images,
+    mediaIds: Array(parsed.assets.length).fill(null),
     nextIndex: 0,
     failedIndex: null,
     completedCount: 0,

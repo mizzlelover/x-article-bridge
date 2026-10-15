@@ -176,31 +176,9 @@ async function relocateNativeUpload(marker, baseline) {
   if (!baseline) return null;
   const result = await bridgeRequest("relocate-native-media", {
     marker,
-    beforeKeys: baseline.beforeKeys
-  }, 15000);
+    beforeIds: baseline.beforeIds
+  }, 125000);
   if (!result?.ok) throw new Error(result?.error || "X 图片上传后无法定位到正文位置");
-  return result;
-}
-
-async function fileBase64(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  }
-  return btoa(binary);
-}
-
-async function uploadThroughEditorHandler(file, marker) {
-  if (!marker || typeof window === "undefined") return null;
-  const result = await bridgeRequest("upload-direct-media", {
-    marker,
-    name: file.name,
-    type: file.type,
-    base64: await fileBase64(file)
-  }, 60000);
-  if (!result) return null;
-  if (!result.ok) throw new Error(result.error || "X 图片上传失败");
   return result;
 }
 
@@ -219,8 +197,6 @@ function cancelMediaUpload() {
 }
 
 async function uploadFile(file, root = null, marker = "") {
-  const directResult = await uploadThroughEditorHandler(file, marker);
-  if (directResult) return directResult;
   const baseline = marker ? await captureNativeUpload() : null;
   if (visibleButtons("Cancel upload").length) cancelMediaUpload();
   if (mediaEditorTitle()) await closeMediaEditor();
@@ -229,6 +205,7 @@ async function uploadFile(file, root = null, marker = "") {
   const previousInputs = new Set(fileInputs());
   const initialMediaCount = root ? root.querySelectorAll("img,figure,video").length : null;
   let mediaMenuOpened = false;
+  let placement = null;
   try {
     button.click();
     const mediaItem = await waitForUi(
@@ -269,10 +246,10 @@ async function uploadFile(file, root = null, marker = "") {
       }
       if (root && root.querySelectorAll("img,figure,video").length > initialMediaCount) return { type: "inserted" };
       return false;
-    }, "X 图片上传没有完成");
+    }, "X 图片上传没有完成", 120000);
     if (completion.type === "failed") throw new Error("X 图片上传失败，请检查该图片格式和大小");
     if (completion.type === "editor") await closeMediaEditor();
-    if (marker) await relocateNativeUpload(marker, baseline);
+    if (marker) placement = await relocateNativeUpload(marker, baseline);
   } finally {
     if (mediaMenuOpened && (mediaUploadStatus() || visibleButtons("Cancel upload").length)) cancelMediaUpload();
     if (mediaMenuOpened && mediaEditorTitle()) {
@@ -282,4 +259,5 @@ async function uploadFile(file, root = null, marker = "") {
       }
     }
   }
+  return placement;
 }
