@@ -51,8 +51,8 @@ test("markdownToHtml preserves supported blocks and image markers", () => {
   assert.equal(result.title, "Title");
   assert.match(result.html, /<strong>Bold<\/strong>/);
   assert.match(result.html, /<em>italic<\/em>/);
-  assert.match(result.html, /XABIMG0/);
-  assert.equal(JSON.stringify(result.assets[0]), JSON.stringify({ marker: "XABIMG0", source: "data:image/png;base64,AA==", name: "article-image-1.png", alt: "Chart" }));
+  assert.ok(result.html.includes(result.assets[0].marker));
+  assert.equal(JSON.stringify(result.assets[0]), JSON.stringify({ marker: result.assets[0].marker, source: "data:image/png;base64,AA==", name: "article-image-1.png", alt: "Chart" }));
   assert.match(result.html, /<ul><li>One<\/li><li>Two<\/li><\/ul>/);
 });
 
@@ -63,6 +63,38 @@ test("createImportGate rejects overlapping imports and releases the lock", () =>
   assert.doesNotThrow(() => gate.assert(first));
   gate.end(first);
   assert.doesNotThrow(() => gate.begin({ id: "second-root" }));
+});
+
+test('article examples containing XABIMG1 and XABIMG10 cannot collide with image placeholders', () => {
+  const article = '# Title\n\n![One](one.png)\n\n![Two](two.png)\n\n技术例子：`XABIMG1` 和 `XABIMG10` 不应被替换。';
+  const parsed = markdownToHtml(article);
+  assert.ok(parsed.html.includes('`XABIMG1` 和 `XABIMG10`'));
+  for (const asset of parsed.assets) {
+    assert.equal(article.includes(asset.marker), false, `placeholder collides with article: ${asset.marker}`);
+    assert.equal(parsed.html.split(asset.marker).length - 1, 1);
+  }
+});
+
+test('separate imports use distinct placeholder namespaces', () => {
+  const article = '# Title\n\n![One](one.png)';
+  assert.notEqual(markdownToHtml(article).assets[0].marker, markdownToHtml(article).assets[0].marker);
+});
+
+test('HTML placeholders avoid source text even if the generated namespace already appears there', () => {
+  const html = '<p>XABIMG1 and XABIMGZSEEDZ0END</p><img src="one.png">';
+  const fixture = {
+    title: '', querySelector: () => null,
+    body: {childNodes: [
+      {nodeType: 3, textContent: 'XABIMG1 and XABIMGZSEEDZ0END'},
+      {nodeType: 1, tagName: 'IMG', getAttribute: name => name === 'src' ? 'one.png' : ''}
+    ]}
+  };
+  const ctx = {Node: {TEXT_NODE: 3, ELEMENT_NODE: 1}, crypto: {randomUUID: () => 'seed'}, DOMParser: class {parseFromString() {return fixture;}}};
+  runInNewContext(source + '\nthis.parse = normalizeHtml;', ctx);
+  const result = ctx.parse(html);
+  assert.equal(html.includes(result.assets[0].marker), false);
+  assert.ok(result.html.includes('XABIMG1 and XABIMGZSEEDZ0END'));
+  assert.equal(result.html.split(result.assets[0].marker).length - 1, 1);
 });
 
 test("dispatchHtml replaces the existing editor selection instead of appending", () => {

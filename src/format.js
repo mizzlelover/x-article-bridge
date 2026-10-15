@@ -35,7 +35,17 @@ function imageName(source, index) {
   return name || `article-image-${index + 1}.png`;
 }
 
+function createImageMarkerFactory(source) {
+  const nonce = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID().replaceAll('-', '').toUpperCase()
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`.toUpperCase();
+  let prefix = `XABIMGZ${nonce}Z`;
+  while (source.includes(prefix)) prefix += 'Q';
+  return (index) => `${prefix}${index}END`;
+}
+
 function normalizeHtml(source) {
+  const markerForIndex = createImageMarkerFactory(source);
   const parsed = new DOMParser().parseFromString(source, "text/html");
   const assets = [];
   const title = parsed.querySelector("h1")?.textContent?.trim() || parsed.title.trim();
@@ -52,7 +62,7 @@ function normalizeHtml(source) {
     if (tag === "IMG") {
       const sourceUrl = element.getAttribute("src")?.trim() || "";
       if (!sourceUrl) return "";
-      const marker = `XABIMG${imageIndex}`;
+      const marker = markerForIndex(imageIndex);
       assets.push({ marker, source: sourceUrl, name: imageName(sourceUrl, imageIndex), alt: element.getAttribute("alt") || "" });
       imageIndex += 1;
       return marker;
@@ -74,6 +84,7 @@ function normalizeHtml(source) {
 }
 
 function markdownToHtml(source) {
+  const markerForIndex = createImageMarkerFactory(source);
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks = [];
   let paragraph = [];
@@ -82,7 +93,7 @@ function markdownToHtml(source) {
   let imageIndex = 0;
 
   const inline = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => `XABIMG${imageIndex++}`)
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, () => markerForIndex(imageIndex++))
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2">$1</a>')
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/__([^_]+)__/g, "<strong>$1</strong>")
@@ -121,7 +132,7 @@ function markdownToHtml(source) {
     flushList(); paragraph.push(line.trim());
   }
   flushParagraph(); flushList();
-  const assets = [...source.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)].map((match, index) => ({ marker: `XABIMG${index}`, source: match[2], name: imageName(match[2], index), alt: match[1] }));
+  const assets = [...source.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)].map((match, index) => ({ marker: markerForIndex(index), source: match[2], name: imageName(match[2], index), alt: match[1] }));
   return { title, html: blocks.join(""), assets };
 }
 

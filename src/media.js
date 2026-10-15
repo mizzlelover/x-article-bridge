@@ -178,7 +178,11 @@ async function relocateNativeUpload(marker, baseline) {
     marker,
     beforeIds: baseline.beforeIds
   }, 125000);
-  if (!result?.ok) throw new Error(result?.error || "X 图片上传后无法定位到正文位置");
+  if (!result?.ok) {
+    const error = new Error(result?.error || "X 图片上传后无法定位到正文位置");
+    if (result?.mediaId) error.mediaId = String(result.mediaId);
+    throw error;
+  }
   return result;
 }
 

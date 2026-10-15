@@ -47,7 +47,11 @@ function showRetryAction(session) {
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.id = 'xab-retry-import';
-  retry.textContent = `重试失败图片（${session.remainingIndexes.length} 张）`;
+  retry.textContent = session.nextIndex >= session.parsed.assets.length
+    ? '重新确认全部图片位置'
+    : session.mediaIds[session.nextIndex]
+      ? `继续确认位置并导入（剩余 ${session.remainingIndexes.length} 张）`
+      : `重试失败图片（${session.remainingIndexes.length} 张）`;
   retry.addEventListener('click', async () => {
     retry.disabled = true;
     try {
@@ -66,7 +70,8 @@ function errorMessage(error) {
 function reportImportError(error) {
   if (retrySession) {
     const failed = retrySession.parsed.assets[retrySession.failedIndex ?? retrySession.nextIndex];
-    setStatus('error', '导入未完成', `已完成 ${retrySession.completedCount}/${retrySession.parsed.assets.length} 张；${failed?.name || '图片'}失败：${errorMessage(error)}`);
+    const uploadedCount = retrySession.mediaIds.filter(Boolean).length;
+    setStatus('error', '导入未完成', `已上传 ${uploadedCount}/${retrySession.parsed.assets.length} 张，已确认位置 ${retrySession.completedCount}/${retrySession.parsed.assets.length} 张；${failed?.name || '图片'}：${errorMessage(error)}`);
     showRetryAction(retrySession);
     return;
   }
@@ -201,18 +206,28 @@ async function uploadRemainingImages(session, token) {
     importGate.assert(token);
     const asset = session.parsed.assets[index];
     session.failedIndex = index;
-    setStatus('working', `正在上传图片 ${index + 1}/${session.parsed.assets.length}`, asset.name);
+    setStatus('working', `正在处理图片 ${index + 1}/${session.parsed.assets.length}`, asset.name);
     if (location.href !== session.articleUrl || !session.root.isConnected) {
       throw new Error('文章已切换，已停止导入');
     }
     try {
-      const image = session.images[index];
-      if (!selectMarker(session.root, asset.marker)) throw new Error(`找不到图片位置：${asset.name}`);
-      const placement = await uploadFile(image, session.root, asset.marker);
-      if (placement?.mediaId) session.mediaIds[index] = String(placement.mediaId);
-      if (findMarker(session.root, asset.marker)) throw new Error(`图片定位尚未完成：${asset.name}`);
+      if (!session.mediaIds[index]) {
+        const image = session.images[index];
+        if (!selectMarker(session.root, asset.marker)) throw new Error(`找不到图片位置：${asset.name}`);
+        const placement = await uploadFile(image, session.root, asset.marker);
+        if (!placement?.mediaId) throw new Error(`X 尚未确认图片媒体编号：${asset.name}`);
+        session.mediaIds[index] = String(placement.mediaId);
+      }
+      setStatus('working', `正在确认图片位置 ${index + 1}/${session.parsed.assets.length}`, `${asset.name} · 已上传，正在等待正文更新`);
+      const confirmation = await bridgeRequest('confirm-media-placement', {
+        articleUrl: session.articleUrl,
+        marker: asset.marker,
+        mediaId: session.mediaIds[index]
+      }, 35000);
+      if (!confirmation?.ok) throw new Error(confirmation?.error || `图片已上传，位置尚未确认：${asset.name}`);
       markImportAssetComplete(session, index);
     } catch (error) {
+      if (error?.mediaId) session.mediaIds[index] = String(error.mediaId);
       markImportAssetFailure(session, index, error);
       throw error;
     }

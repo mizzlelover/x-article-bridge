@@ -300,6 +300,49 @@
     return parts.join("\u001f");
   }
 
+  async function confirmMediaPlacement(marker, mediaId, timeout = 30000, articleUrl = location.href) {
+    if (!marker || !mediaId) return {ok: false, error: "图片位置确认缺少媒体编号"};
+    const deadline = Date.now() + timeout;
+    let lastSignature = null;
+    let stableSince = 0;
+    while (true) {
+      if (location.href !== articleUrl) return {ok: false, mediaId, error: "文章已切换，已停止图片定位"};
+      const latest = draftStateNode();
+      const content = latest?.props?.editorState?.getCurrentContent?.();
+      const mediaKey = content ? mediaBlockForId(content, mediaId) : null;
+      if (mediaKey) {
+        if (markerLocation(content, marker)) {
+          relocateMediaBlock(latest, marker, mediaKey);
+          lastSignature = null;
+          stableSince = 0;
+        } else {
+          const editorText = editorElement()?.textContent || "";
+          const markerVisible = new RegExp(`${marker}(?!\\d)`).test(editorText);
+          if (!markerVisible) {
+            const signature = contentSignature(content);
+            if (signature === lastSignature && Date.now() - stableSince >= 2000) {
+              return {ok: true, mediaId, blockKey: mediaKey};
+            }
+            if (signature !== lastSignature) {
+              lastSignature = signature;
+              stableSince = Date.now();
+            }
+          } else {
+            lastSignature = null;
+            stableSince = 0;
+          }
+        }
+      } else {
+        lastSignature = null;
+        stableSince = 0;
+      }
+      if (Date.now() >= deadline) {
+        return {ok: false, mediaId, error: "图片已上传，但正文位置尚未稳定；点击重试只确认位置，不会重复上传这张图片"};
+      }
+      await sleep(100);
+    }
+  }
+
   async function settleImportedMedia(placements, timeout = 30000, articleUrl = location.href) {
     if (!Array.isArray(placements) || placements.some((placement) => !placement?.marker || !placement?.mediaId)) {
       return {ok: false, error: "X 尚未确认所有正文图片的媒体编号，请点击重试确认"};
@@ -396,6 +439,12 @@
       });
       return;
     }
+    if (message.kind === "confirm-media-placement") {
+      confirmMediaPlacement(message.marker, message.mediaId, 30000, message.articleUrl || location.href)
+        .then((result) => post("confirmed-media-result", {requestId: message.requestId, ...result}))
+        .catch((error) => post("confirmed-media-result", {requestId: message.requestId, ok: false, mediaId: message.mediaId, error: error instanceof Error ? error.message : "图片位置尚未确认"}));
+      return;
+    }
     if (message.kind === "settle-imported-media") {
       settleImportedMedia(message.placements, 30000, message.articleUrl || location.href)
         .then((result) => post("settled-media-result", {requestId: message.requestId, ...result}))
@@ -408,7 +457,7 @@
         if (!uploaded) return { ok: false, error: "X 图片上传成功后没有生成正文媒体块" };
         const latest = draftStateNode() || uploaded.draftNode;
         if (!relocateMediaBlock(latest, message.marker, uploaded.blockKey)) {
-          return { ok: false, error: "找不到图片对应的正文位置" };
+          return { ok: false, mediaId: uploaded.mediaId, error: "图片已上传，但找不到对应的正文位置" };
         }
         return { ok: true, blockKey: uploaded.blockKey, mediaId: uploaded.mediaId };
       })

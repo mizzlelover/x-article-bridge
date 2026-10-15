@@ -151,8 +151,8 @@ function settlementHarness() {
       return true;
     }
   };
-  runInNewContext(settlementSource + '\nthis.settle = settleImportedMedia;', context);
-  return {calls, placements, context, settle: context.settle, blocks, now: () => now};
+  runInNewContext(settlementSource + '\nthis.settle = settleImportedMedia; this.confirm = confirmMediaPlacement;', context);
+  return {calls, placements, context, settle: context.settle, confirm: context.confirm, blocks, now: () => now};
 }
 
 test('final media settlement repairs a delayed marker and waits for a stable editor state', async () => {
@@ -171,6 +171,35 @@ test('final media settlement rejects missing upload identities without throwing'
   assert.equal(result.ok, false);
   assert.match(result.error, /媒体编号/);
   assert.equal(harness.calls.relocations.length, 0);
+});
+
+test('per-image confirmation repairs a late marker while other uploaded images remain present', async () => {
+  const h = settlementHarness();
+  const last = h.placements.at(-1);
+  const result = await h.confirm(last.marker, last.mediaId);
+  assert.equal(result.ok, true);
+  assert.equal(result.mediaId, last.mediaId);
+  assert.equal(h.calls.relocations.length, 1);
+  assert.ok(h.now() >= 3500);
+  assert.equal(h.blocks.filter(block => block.getType() === 'atomic').length, 6);
+});
+
+test('per-image confirmation waits for delayed DOM rendering instead of immediately failing', async () => {
+  const h = settlementHarness();
+  const last = h.placements.at(-1);
+  h.context.editorElement = () => ({textContent: h.now() < 3000 ? last.marker : ''});
+  const result = await h.confirm(last.marker, last.mediaId);
+  assert.equal(result.ok, true);
+  assert.ok(h.now() >= 5000);
+});
+
+test('per-image confirmation timeout reports the existing media identity without re-uploading', async () => {
+  const h = settlementHarness();
+  h.context.editorElement = () => ({textContent: 'XABIMG5'});
+  const result = await h.confirm('XABIMG5', h.placements[5].mediaId, 300);
+  assert.equal(result.ok, false);
+  assert.equal(result.mediaId, h.placements[5].mediaId);
+  assert.match(result.error, /不会重复上传/);
 });
 
 function replaceBodyHarness(nativeResult = 'handled') {
