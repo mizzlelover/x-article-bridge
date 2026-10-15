@@ -270,6 +270,7 @@ async function retryPendingImages() {
     if (location.href !== session.articleUrl || !session.root.isConnected) {
       throw new Error('文章已切换，请重新导入');
     }
+    await ensureMainBridge();
     await uploadRemainingImages(session, token);
     await finishImportedSession(session);
   } catch (error) {
@@ -299,6 +300,7 @@ async function importArticle(file) {
     if (typeof source !== "string") throw new Error("无法读取文章内容");
     const parsed = file.name.toLowerCase().endsWith(".md") ? markdownToHtml(source) : normalizeHtml(source);
     if (!parsed.html) throw new Error("文件没有可导入的正文");
+    await ensureMainBridge();
     const limits = await bridgeRequest("article-media-limit");
     const mediaLimit = limits?.mediaLimit || 25;
     if (parsed.assets.length > mediaLimit) {

@@ -1,9 +1,11 @@
 (() => {
-  if (window.__xabMainBridgeInstalled) return;
+  const BRIDGE_VERSION = '0.1.16';
+  if (window.__xabMainBridgeVersion === BRIDGE_VERSION) return;
+  window.__xabMainBridgeVersion = BRIDGE_VERSION;
   window.__xabMainBridgeInstalled = true;
 
-  const CHANNEL_TO_MAIN = "xab-bridge";
-  const CHANNEL_FROM_MAIN = "xab-main";
+  const CHANNEL_TO_MAIN = "xab-bridge-v2";
+  const CHANNEL_FROM_MAIN = "xab-main-v2";
   const EDITOR_SELECTOR = "[data-contents='true'] [contenteditable='true'], [contenteditable='true'][role='textbox'], [contenteditable='true'].public-DraftEditor-content, [contenteditable='true']";
   const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
   let activeOperation = false;
@@ -419,7 +421,8 @@
       return;
     }
     if (message.kind === "ready?") {
-      post("ready", { requestId: message.requestId, ready: Boolean(draftStateNode()) });
+      post("ready", { requestId: message.requestId, ready: Boolean(draftStateNode()), bridgeVersion: BRIDGE_VERSION,
+        capabilities: ['confirm-media-placement', 'settle-imported-media'] });
       return;
     }
     if (message.kind === "article-media-limit") {

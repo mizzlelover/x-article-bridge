@@ -129,6 +129,8 @@ function addPhotosButton() {
     .at(-1) || null;
 }
 
+const XAB_BRIDGE_VERSION = '0.1.16';
+
 function waitForUi(predicate, message, timeout = 10000) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
@@ -154,17 +156,34 @@ function bridgeRequest(kind, payload = {}, timeout = 1200) {
     const requestId = `xab_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const timer = setTimeout(() => {
       window.removeEventListener("message", listener);
-      reject(new Error("X 正文媒体桥接超时"));
+      reject(new Error(`X 页面通信超时（${kind}，插件 ${XAB_BRIDGE_VERSION}）；图片若已上传，重试只确认位置`));
     }, timeout);
     const listener = (event) => {
-      if (event.source !== window || event.data?.source !== "xab-main" || event.data.requestId !== requestId) return;
+      if (event.source !== window || event.data?.source !== "xab-main-v2" || event.data.requestId !== requestId) return;
       clearTimeout(timer);
       window.removeEventListener("message", listener);
       resolve(event.data);
     };
     window.addEventListener("message", listener);
-    window.postMessage({ source: "xab-bridge", kind, requestId, ...payload }, "*");
+    window.postMessage({ source: "xab-bridge-v2", kind, requestId, ...payload }, "*");
   });
+}
+
+async function ensureMainBridge() {
+  const compatible = (reply) => reply?.bridgeVersion === XAB_BRIDGE_VERSION
+    && reply.capabilities?.includes('confirm-media-placement');
+  let ready = await bridgeRequest('ready?', {}, 2500).catch(() => null);
+  if (!compatible(ready)) {
+    if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
+      throw new Error(`X 页面桥接版本不匹配，请刷新页面后重试（插件 ${XAB_BRIDGE_VERSION}）；尚未开始上传`);
+    }
+    const restored = await chrome.runtime.sendMessage({type: 'ensureMainBridge'});
+    if (!restored?.ok) throw new Error(restored?.error || '无法恢复 X 页面通信，请刷新页面后重试');
+    ready = await bridgeRequest('ready?', {}, 2500).catch(() => null);
+  }
+  if (!compatible(ready)) throw new Error(`X 页面通信未恢复，请重新打开文章（插件 ${XAB_BRIDGE_VERSION}）；不会重新上传已有图片`);
+  if (!ready.ready) throw new Error('X 正文编辑状态尚未就绪，请等待编辑器加载后重试');
+  return ready;
 }
 
 async function captureNativeUpload() {

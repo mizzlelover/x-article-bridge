@@ -40,6 +40,7 @@ retryButton.addEventListener('click', async () => {
 });
 
 async function ensureContentScript(tabId) {
+  await chrome.scripting.executeScript({ target: { tabId }, files: mainWorldFiles, world: "MAIN" });
   let ping = null;
   try {
     ping = await chrome.tabs.sendMessage(tabId, { type: "ping" });
